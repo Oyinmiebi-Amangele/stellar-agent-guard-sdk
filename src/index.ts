@@ -29,8 +29,14 @@ export {
   InvalidFeeCeilingError,
   InvalidInputError,
   PolicyDecodeError,
+  PolicyEncodeError,
   SigningError,
   SimulationError,
+} from "./errors.ts";
+
+export type {
+  PolicyEncodingFailure,
+  PolicyEncodingRuleId,
 } from "./errors.ts";
 
 export {
@@ -86,6 +92,7 @@ export {
   unsafePublicKeyHex,
   unsafeStrKeyAddress,
   validateGuardPolicy,
+  validatePolicyForEncoding,
 } from "./policy.ts";
 
 export type {

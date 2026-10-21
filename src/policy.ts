@@ -14,7 +14,11 @@ import { Address, nativeToScVal, rpc, scValToNative, StrKey, xdr } from "@stella
  * caps are `i128` and silently narrowing them to `number` would lose precision
  * on exactly the values a spend guard exists to compare.
  */
-import { PolicyDecodeError } from "./errors.ts";
+import {
+  PolicyDecodeError,
+  PolicyEncodeError,
+  type PolicyEncodingFailure,
+} from "./errors.ts";
 import { isGuardReason } from "./reasons.ts";
 import type { ContractCall } from "./tx.ts";
 
@@ -268,8 +272,18 @@ export type CheckResult =
  * `HostError: Error(Object, InvalidInput) — ScMap was not sorted by key for
  * conversion to host object`. Sorting by the symbol text is the same order the
  * host's `Symbol` comparison uses.
+ *
+ * The draft is validated **before** any `ScVal` is constructed. A malformed
+ * field therefore throws a `PolicyEncodeError` carrying every actionable path
+ * (`protocols[1].contract`, `recipient_window_caps[0].cap`, …) rather than a
+ * low-level `nativeToScVal`/`Address` exception from halfway through the map.
+ * Use `validatePolicyForEncoding` when the caller wants the same failures
+ * without an exception, for example to highlight a policy-editor form.
  */
 export function policyToScVal(policy: ReadonlyPolicyConfig): xdr.ScVal {
+  const failures = validatePolicyForEncoding(policy);
+  if (failures.length > 0) throw new PolicyEncodeError(failures);
+
   const entries: Array<{ key: string; val: xdr.ScVal }> = [
     { key: "per_tx_cap", val: nativeToScVal(policy.per_tx_cap, { type: "i128" }) },
     { key: "window_secs", val: nativeToScVal(policy.window_secs, { type: "u64" }) },
@@ -972,6 +986,317 @@ function toBigInt(val: unknown): bigint {
   if (typeof val === "number") return BigInt(val);
   if (typeof val === "string") return BigInt(val.trim());
   return 0n;
+}
+
+/** Soroban symbol grammar: 1–32 ASCII letters, digits, or underscores. */
+const SYMBOL_NAME = /^[A-Za-z0-9_]{1,32}$/;
+
+/** A compact rendering of a rejected value for an encoding failure message. */
+function describeEncodingValue(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "bigint") return `${value}n`;
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return "an array";
+  if (typeof value === "object") return "an object";
+  return String(value);
+}
+
+/**
+ * Validate that a policy draft can be represented as the contract's
+ * `PolicyConfig` `ScVal`, without encoding it.
+ *
+ * This is the pre-flight counterpart to `validateGuardPolicy`: it does not
+ * duplicate the contract's SPEC §8 policy semantics (a negative `per_tx_cap` is
+ * still a valid `i128` on the wire, and an empty function list is still a valid
+ * `Vec`), it checks the things `policyToScVal` would otherwise discover halfway
+ * through building the map:
+ *
+ * - required fields are present and have the right JavaScript shape;
+ * - integer fields fit their wire type (`u64` or `i128`) exactly;
+ * - numbers are accepted only when they are safe integers — an unsafe `number`
+ *   is rejected instead of being rounded by `nativeToScVal`, and numeric
+ *   strings are rejected rather than coerced;
+ * - addresses are checksum-valid Stellar strkeys;
+ * - protocol function names are valid Soroban symbols;
+ * - the optional `recipient_window_caps`/`blocked_recipients` lists are
+ *   well-formed even though the current contract `PolicyConfig` does not carry
+ *   them, so an editor draft is never silently submitted with a broken list.
+ *
+ * Every failure is returned, in policy field order, so a form can render all of
+ * them at once. Returning an empty array means `policyToScVal` will encode the
+ * draft without throwing.
+ */
+export function validatePolicyForEncoding(policy: unknown): PolicyEncodingFailure[] {
+  if (policy === null || typeof policy !== "object" || Array.isArray(policy)) {
+    return [
+      {
+        path: "policy",
+        rule: "invalid_type",
+        message: `policy must be a non-null object, got ${describeEncodingValue(policy)}`,
+      },
+    ];
+  }
+
+  const raw = policy as Record<string, unknown>;
+  const failures: PolicyEncodingFailure[] = [];
+
+  validateEncodingInteger(raw, "per_tx_cap", "i128", failures);
+  validateEncodingInteger(raw, "window_secs", "u64", failures);
+  validateEncodingInteger(raw, "window_cap", "i128", failures);
+  validateEncodingAddressArray(raw.assets, "assets", false, failures);
+  validateEncodingProtocols(raw.protocols, failures);
+  validateEncodingAddressArray(raw.recipients, "recipients", false, failures);
+  validateEncodingBoolean(raw.allow_any_recipient, "allow_any_recipient", failures);
+  validateEncodingInteger(raw, "active_from", "u64", failures);
+  validateEncodingInteger(raw, "active_until", "u64", failures);
+  validateEncodingBoolean(raw.paused, "paused", failures);
+  validateEncodingInteger(raw, "dms_grace_secs", "u64", failures);
+  validateEncodingRecipientWindowCaps(raw.recipient_window_caps, failures);
+  validateEncodingAddressArray(raw.blocked_recipients, "blocked_recipients", true, failures);
+
+  return failures;
+}
+
+function validateEncodingInteger(
+  raw: Record<string, unknown>,
+  field: string,
+  wireType: "u64" | "i128",
+  failures: PolicyEncodingFailure[],
+): void {
+  const value = raw[field];
+  if (value === undefined) {
+    failures.push({ path: field, rule: "missing_field", message: `${field} is required` });
+    return;
+  }
+  validateEncodingIntegerValue(value, field, wireType, failures);
+}
+
+function validateEncodingIntegerValue(
+  value: unknown,
+  path: string,
+  wireType: "u64" | "i128",
+  failures: PolicyEncodingFailure[],
+): void {
+  let integer: bigint;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isInteger(value)) {
+      failures.push({
+        path,
+        rule: "invalid_type",
+        message: `expected an integer, got ${describeEncodingValue(value)}`,
+      });
+      return;
+    }
+    if (!Number.isSafeInteger(value)) {
+      failures.push({
+        path,
+        rule: "invalid_type",
+        message: `number ${value} is not a safe integer; pass a bigint so the value is not rounded`,
+      });
+      return;
+    }
+    integer = BigInt(value);
+  } else {
+    failures.push({
+      path,
+      rule: "invalid_type",
+      message: `expected a bigint integer, got ${describeEncodingValue(value)}`,
+    });
+    return;
+  }
+
+  const [min, max] = wireType === "u64" ? [0n, U64_MAX] : [I128_MIN, I128_MAX];
+  if (integer < min || integer > max) {
+    failures.push({
+      path,
+      rule: "integer_out_of_range",
+      message: `${integer} is outside the ${wireType} range [${min}, ${max}]`,
+    });
+  }
+}
+
+function validateEncodingAddress(
+  value: unknown,
+  path: string,
+  failures: PolicyEncodingFailure[],
+): void {
+  if (typeof value !== "string") {
+    failures.push({
+      path,
+      rule: "invalid_type",
+      message: `expected a Stellar address string, got ${describeEncodingValue(value)}`,
+    });
+    return;
+  }
+  try {
+    new Address(value);
+  } catch {
+    failures.push({
+      path,
+      rule: "invalid_address",
+      message: `${JSON.stringify(value)} is not a valid Stellar address`,
+    });
+  }
+}
+
+function validateEncodingAddressArray(
+  value: unknown,
+  path: string,
+  optional: boolean,
+  failures: PolicyEncodingFailure[],
+): void {
+  if (value === undefined || (optional && value === null)) {
+    if (!optional) {
+      failures.push({ path, rule: "missing_field", message: `${path} is required` });
+    }
+    return;
+  }
+  if (!Array.isArray(value)) {
+    failures.push({
+      path,
+      rule: "invalid_type",
+      message: `expected an array of Stellar addresses, got ${describeEncodingValue(value)}`,
+    });
+    return;
+  }
+  value.forEach((entry, index) => validateEncodingAddress(entry, `${path}[${index}]`, failures));
+}
+
+function validateEncodingBoolean(
+  value: unknown,
+  path: string,
+  failures: PolicyEncodingFailure[],
+): void {
+  if (value === undefined) {
+    failures.push({ path, rule: "missing_field", message: `${path} is required` });
+  } else if (typeof value !== "boolean") {
+    failures.push({
+      path,
+      rule: "invalid_type",
+      message: `expected a boolean, got ${describeEncodingValue(value)}`,
+    });
+  }
+}
+
+function validateEncodingProtocols(value: unknown, failures: PolicyEncodingFailure[]): void {
+  if (value === undefined) {
+    failures.push({ path: "protocols", rule: "missing_field", message: "protocols is required" });
+    return;
+  }
+  if (!Array.isArray(value)) {
+    failures.push({
+      path: "protocols",
+      rule: "invalid_type",
+      message: `expected an array of protocol rules, got ${describeEncodingValue(value)}`,
+    });
+    return;
+  }
+
+  value.forEach((entry, index) => {
+    const path = `protocols[${index}]`;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      failures.push({
+        path,
+        rule: "invalid_type",
+        message: `protocol rule must be an object, got ${describeEncodingValue(entry)}`,
+      });
+      return;
+    }
+
+    const rule = entry as Record<string, unknown>;
+    if (rule.contract === undefined) {
+      failures.push({
+        path: `${path}.contract`,
+        rule: "missing_field",
+        message: "protocol rule requires a contract address",
+      });
+    } else {
+      validateEncodingAddress(rule.contract, `${path}.contract`, failures);
+    }
+
+    if (rule.fns === undefined) {
+      failures.push({
+        path: `${path}.fns`,
+        rule: "missing_field",
+        message: "protocol rule requires fns (use null to allow any function)",
+      });
+    } else if (rule.fns !== null) {
+      if (!Array.isArray(rule.fns)) {
+        failures.push({
+          path: `${path}.fns`,
+          rule: "invalid_type",
+          message: `expected null or an array of function names, got ${describeEncodingValue(rule.fns)}`,
+        });
+      } else {
+        rule.fns.forEach((fn, fnIndex) => {
+          const fnPath = `${path}.fns[${fnIndex}]`;
+          if (typeof fn !== "string") {
+            failures.push({
+              path: fnPath,
+              rule: "invalid_type",
+              message: `expected a function name string, got ${describeEncodingValue(fn)}`,
+            });
+          } else if (!SYMBOL_NAME.test(fn)) {
+            failures.push({
+              path: fnPath,
+              rule: "invalid_symbol",
+              message: `${JSON.stringify(fn)} is not a Soroban symbol (1-32 letters, digits, or underscores)`,
+            });
+          }
+        });
+      }
+    }
+  });
+}
+
+function validateEncodingRecipientWindowCaps(
+  value: unknown,
+  failures: PolicyEncodingFailure[],
+): void {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) {
+    failures.push({
+      path: "recipient_window_caps",
+      rule: "invalid_type",
+      message: `expected an array of recipient window caps, got ${describeEncodingValue(value)}`,
+    });
+    return;
+  }
+
+  value.forEach((entry, index) => {
+    const path = `recipient_window_caps[${index}]`;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      failures.push({
+        path,
+        rule: "invalid_type",
+        message: `recipient window cap must be an object, got ${describeEncodingValue(entry)}`,
+      });
+      return;
+    }
+
+    const cap = entry as Record<string, unknown>;
+    if (cap.recipient === undefined) {
+      failures.push({
+        path: `${path}.recipient`,
+        rule: "missing_field",
+        message: "recipient window cap requires a recipient address",
+      });
+    } else {
+      validateEncodingAddress(cap.recipient, `${path}.recipient`, failures);
+    }
+
+    if (cap.cap === undefined) {
+      failures.push({
+        path: `${path}.cap`,
+        rule: "missing_field",
+        message: "recipient window cap requires a cap amount",
+      });
+    } else {
+      validateEncodingIntegerValue(cap.cap, `${path}.cap`, "i128", failures);
+    }
+  });
 }
 
 /**

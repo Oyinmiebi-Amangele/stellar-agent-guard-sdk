@@ -13,7 +13,7 @@ import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import { Address, nativeToScVal, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 import { mulberry32, randomUint } from "./seeded-random.ts";
-import { PolicyDecodeError } from "../../src/errors.ts";
+import { PolicyDecodeError, PolicyEncodeError } from "../../src/errors.ts";
 import { POLICY_JSON_VERSION, policyFromJson, policyToJson } from "../../src/policy-json.ts";
 import type { CheckResult } from "../../src/policy.ts";
 import {
@@ -29,6 +29,7 @@ import {
   policyToScVal,
   readPersistentEntry,
   validateGuardPolicy,
+  validatePolicyForEncoding,
   freezePolicy,
   unsafeContractAddress,
   unsafeAccountAddress,
@@ -193,6 +194,249 @@ describe("policyToScVal", () => {
 
   it("rejects a malformed address rather than emitting a broken policy", () => {
     assert.throws(() => policyToScVal(samplePolicy({ recipients: [unsafeAccountAddress("not-an-address")] })));
+  });
+});
+
+describe("policyToScVal validation", () => {
+  /** Encode a draft expected to fail, returning the typed failure for assertions. */
+  function reject(policy: unknown): PolicyEncodeError {
+    try {
+      policyToScVal(policy as PolicyConfig);
+    } catch (error) {
+      assert.ok(error instanceof PolicyEncodeError, `expected PolicyEncodeError, got ${String(error)}`);
+      return error;
+    }
+    assert.fail("expected policyToScVal to reject the draft");
+  }
+
+  it("accepts a valid policy and the full i128/u64 boundary values", () => {
+    const atBounds = samplePolicy({
+      per_tx_cap: 2n ** 127n - 1n,
+      window_cap: -(2n ** 127n),
+      window_secs: 0n,
+      active_from: 2n ** 64n - 1n,
+      active_until: 2n ** 64n - 1n,
+      dms_grace_secs: 2n ** 64n - 1n,
+    });
+    assert.deepEqual(validatePolicyForEncoding(atBounds), []);
+    assert.doesNotThrow(() => policyToScVal(atBounds));
+  });
+
+  it("accepts safe integer numbers without losing precision", () => {
+    const draft = samplePolicy({
+      per_tx_cap: 9_007_199_254_740_991 as unknown as bigint, // Number.MAX_SAFE_INTEGER
+      window_secs: 60 as unknown as bigint,
+    });
+    assert.deepEqual(validatePolicyForEncoding(draft), []);
+    const decoded = scValToNative(policyToScVal(draft)) as Record<string, unknown>;
+    assert.equal(decoded["per_tx_cap"], 9_007_199_254_740_991n);
+  });
+
+  it("exposes a typed, path-bearing failure contract for a bad top-level field", () => {
+    const error = reject(samplePolicy({ assets: ["not-an-address" as ContractAddress] }));
+    assert.ok(error instanceof PolicyEncodeError);
+    assert.ok(error instanceof TypeError);
+    assert.equal(error.name, "PolicyEncodeError");
+    assert.equal(error.path, "assets[0]");
+    assert.equal(error.field, "assets[0]");
+    assert.equal(error.rule, "invalid_address");
+    assert.match(error.message, /assets\[0\]/);
+    assert.deepEqual(error.failures, [
+      {
+        path: "assets[0]",
+        rule: "invalid_address",
+        message: '"not-an-address" is not a valid Stellar address',
+      },
+    ]);
+    assert.ok(Object.isFrozen(error.failures));
+  });
+
+  it("reports missing required fields instead of throwing a bare TypeError", () => {
+    const error = reject({ assets: [], protocols: [], recipients: [] });
+    const paths = error.failures.map((failure) => failure.path);
+    for (const required of [
+      "per_tx_cap",
+      "window_secs",
+      "window_cap",
+      "allow_any_recipient",
+      "active_from",
+      "active_until",
+      "paused",
+      "dms_grace_secs",
+    ]) {
+      assert.ok(paths.includes(required), `expected a missing_field failure for ${required}`);
+    }
+    assert.ok(error.failures.every((failure) => failure.rule === "missing_field"));
+  });
+
+  describe("nested protocol failures", () => {
+    it("reports the failing protocol contract and function symbol paths", () => {
+      const error = reject(
+        samplePolicy({
+          protocols: [
+            { contract: TOKEN, fns: ["transfer"] },
+            {
+              contract: "not-a-contract" as ContractAddress,
+              fns: ["approve", "not a symbol"],
+            },
+          ],
+        }),
+      );
+      assert.equal(error.path, "protocols[1].contract");
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [
+          ["protocols[1].contract", "invalid_address"],
+          ["protocols[1].fns[1]", "invalid_symbol"],
+        ],
+      );
+    });
+
+    it("reports a nested protocol that is not an object", () => {
+      const error = reject(
+        samplePolicy({ protocols: ["transfer" as unknown as ProtocolRule] }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [["protocols[0]", "invalid_type"]],
+      );
+    });
+
+    it("reports missing contract and fns fields on a protocol rule", () => {
+      const error = reject(
+        samplePolicy({ protocols: [{ contract: TOKEN } as unknown as ProtocolRule] }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [["protocols[0].fns", "missing_field"]],
+      );
+    });
+
+    it("rejects an empty or overly long Soroban symbol", () => {
+      const error = reject(
+        samplePolicy({
+          protocols: [{ contract: TOKEN, fns: ["", "a".repeat(33), "ok_1"] }],
+        }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => failure.path),
+        ["protocols[0].fns[0]", "protocols[0].fns[1]"],
+      );
+      assert.ok(error.failures.every((failure) => failure.rule === "invalid_symbol"));
+    });
+  });
+
+  describe("recipient cap failures", () => {
+    it("reports out-of-range caps and unsafe numbers with their nested paths", () => {
+      const error = reject(
+        samplePolicy({
+          recipient_window_caps: [
+            { recipient: RECIPIENT, cap: 2n ** 127n },
+            { recipient: RECIPIENT, cap: 1.5 as unknown as bigint },
+            { recipient: "not-a-recipient" as AccountAddress, cap: 10n },
+          ],
+        }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [
+          ["recipient_window_caps[0].cap", "integer_out_of_range"],
+          ["recipient_window_caps[1].cap", "invalid_type"],
+          ["recipient_window_caps[2].recipient", "invalid_address"],
+        ],
+      );
+      assert.match(error.failures[1]!.message, /expected an integer/);
+    });
+
+    it("reports missing recipient cap fields", () => {
+      const error = reject(
+        samplePolicy({
+          recipient_window_caps: [{ recipient: RECIPIENT } as RecipientWindowCap],
+        }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [["recipient_window_caps[0].cap", "missing_field"]],
+      );
+    });
+  });
+
+  describe("integer boundary failures", () => {
+    it("rejects values just outside the i128 and u64 ranges", () => {
+      const error = reject(
+        samplePolicy({
+          per_tx_cap: 2n ** 127n,
+          window_cap: -(2n ** 127n) - 1n,
+          window_secs: 2n ** 64n,
+          active_from: -1n,
+          active_until: 2n ** 64n,
+          dms_grace_secs: -1n,
+        }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [
+          ["per_tx_cap", "integer_out_of_range"],
+          ["window_secs", "integer_out_of_range"],
+          ["window_cap", "integer_out_of_range"],
+          ["active_from", "integer_out_of_range"],
+          ["active_until", "integer_out_of_range"],
+          ["dms_grace_secs", "integer_out_of_range"],
+        ],
+      );
+    });
+
+    it("rejects unsafe numbers and numeric strings instead of coercing them", () => {
+      const error = reject(
+        samplePolicy({
+          per_tx_cap: (Number.MAX_SAFE_INTEGER + 1) as unknown as bigint, // unsafe by one
+          window_cap: Number.POSITIVE_INFINITY as unknown as bigint,
+          window_secs: "60" as unknown as bigint,
+        }),
+      );
+      assert.deepEqual(
+        error.failures.map((failure) => [failure.path, failure.rule]),
+        [
+          ["per_tx_cap", "invalid_type"],
+          ["window_secs", "invalid_type"],
+          ["window_cap", "invalid_type"],
+        ],
+      );
+      assert.match(error.failures[0]!.message, /not a safe integer/);
+      assert.match(error.failures[1]!.message, /expected a bigint integer/);
+    });
+
+    it("accumulates failures from unrelated fields in one pass", () => {
+      const error = reject({
+        per_tx_cap: 1.5,
+        window_secs: 0n,
+        window_cap: 0n,
+        assets: "nope",
+        protocols: "nope",
+        recipients: null,
+        allow_any_recipient: "yes",
+        active_from: 0n,
+        active_until: 0n,
+        paused: false,
+        dms_grace_secs: 0n,
+      });
+      assert.deepEqual(
+        error.failures.map((failure) => failure.path),
+        ["per_tx_cap", "assets", "protocols", "recipients", "allow_any_recipient"],
+      );
+      assert.match(error.message, /and 4 more failure\(s\)/);
+    });
+  });
+
+  it("returns the same failures from validatePolicyForEncoding without throwing", () => {
+    const draft = samplePolicy({ recipients: ["nope" as AccountAddress] });
+    assert.deepEqual(validatePolicyForEncoding(draft), [
+      {
+        path: "recipients[0]",
+        rule: "invalid_address",
+        message: '"nope" is not a valid Stellar address',
+      },
+    ]);
   });
 });
 

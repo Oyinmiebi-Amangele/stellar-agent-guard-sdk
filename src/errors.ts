@@ -216,6 +216,66 @@ export class PolicyDecodeError extends GuardError {
 }
 
 /**
+ * Stable identifiers for policy *encoding* failures.
+ *
+ * Deliberately separate from `POLICY_RULE_IDS` (SPEC §8 semantics): these rules
+ * describe whether a draft can be represented as the contract's `PolicyConfig`
+ * at all, not whether the resulting policy is sensible. A SPEC rule id would be
+ * misleading for an integer that simply does not fit the wire type.
+ */
+export type PolicyEncodingRuleId =
+  | "invalid_type"
+  | "missing_field"
+  | "invalid_address"
+  | "invalid_symbol"
+  | "integer_out_of_range";
+
+/** One actionable, field-level reason a policy draft cannot be encoded. */
+export interface PolicyEncodingFailure {
+  /** Dotted path into the policy object, e.g. `protocols[1].fns[0]`. */
+  path: string;
+  /** Stable rule identifier for the failed encoding check. */
+  rule: PolicyEncodingRuleId;
+  /** Human-readable detail naming the offending value. */
+  message: string;
+}
+
+/**
+ * A policy draft could not be encoded as contract `ScVal` because one or more
+ * fields violate the wire contract.
+ *
+ * The policy-editor counterpart to `PolicyDecodeError`: both report a dotted
+ * `path`, so the same form can highlight a field whether the bad value came
+ * from a draft before submission or from a policy read back off-chain. Every
+ * failure is collected before the error is thrown, and no partial `ScVal` is
+ * ever produced — `failures` is the complete list a form should render, while
+ * `path`/`rule`/`field` describe the first one.
+ *
+ * This is invalid caller input (it is caught before any RPC or encoding work),
+ * so it extends `InvalidInputError` and remains an `instanceof TypeError`.
+ */
+export class PolicyEncodeError extends InvalidInputError {
+  /** Dotted path of the first failure; equal to `failures[0]?.path`. */
+  readonly path: string;
+  /** Every encoding failure found, in policy field order. */
+  readonly failures: readonly PolicyEncodingFailure[];
+
+  constructor(failures: readonly PolicyEncodingFailure[]) {
+    const [first, ...rest] = failures;
+    if (first === undefined) {
+      throw new TypeError("PolicyEncodeError requires at least one failure");
+    }
+    super(
+      first.path,
+      first.rule,
+      rest.length === 0 ? first.message : `${first.message} (and ${rest.length} more failure(s))`,
+    );
+    this.path = first.path;
+    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+  }
+}
+
+/**
  * An adapter's call mapper could not produce a contract call.
  *
  * `toContractCall`/`toContractCalls` is application code: when it throws, or
