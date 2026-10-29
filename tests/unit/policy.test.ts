@@ -197,7 +197,9 @@ describe("policyToScVal", () => {
   });
 
   it("rejects a malformed address rather than emitting a broken policy", () => {
-    assert.throws(() => policyToScVal(samplePolicy({ recipients: [unsafeAccountAddress("not-an-address")] })));
+    assert.throws(() =>
+      policyToScVal(samplePolicy({ recipients: [unsafeAccountAddress("not-an-address")] })),
+    );
   });
 });
 
@@ -207,7 +209,10 @@ describe("policyToScVal validation", () => {
     try {
       policyToScVal(policy as PolicyConfig);
     } catch (error) {
-      assert.ok(error instanceof PolicyEncodeError, `expected PolicyEncodeError, got ${String(error)}`);
+      assert.ok(
+        error instanceof PolicyEncodeError,
+        `expected PolicyEncodeError, got ${String(error)}`,
+      );
       return error;
     }
     assert.fail("expected policyToScVal to reject the draft");
@@ -297,9 +302,7 @@ describe("policyToScVal validation", () => {
     });
 
     it("reports a nested protocol that is not an object", () => {
-      const error = reject(
-        samplePolicy({ protocols: ["transfer" as unknown as ProtocolRule] }),
-      );
+      const error = reject(samplePolicy({ protocols: ["transfer" as unknown as ProtocolRule] }));
       assert.deepEqual(
         error.failures.map((failure) => [failure.path, failure.rule]),
         [["protocols[0]", "invalid_type"]],
@@ -548,10 +551,7 @@ describe("decodePolicy", () => {
 
   it("decodes the raw ScVal captured from the deployed Phase-1 policy() read", async () => {
     const fixture = JSON.parse(
-      await readFile(
-        new URL("../fixtures/phase1-policy-scval.json", import.meta.url),
-        "utf8",
-      ),
+      await readFile(new URL("../fixtures/phase1-policy-scval.json", import.meta.url), "utf8"),
     ) as Phase1PolicyFixture;
     const bytes = Buffer.from(fixture.scvalBase64, "base64");
     assert.equal(bytes.length, fixture.scvalByteLength);
@@ -559,7 +559,10 @@ describe("decodePolicy", () => {
 
     const scval = xdr.ScVal.fromXDR(fixture.scvalBase64, "base64");
     assert.equal(scval.type, fixture.scvalType);
-    assert.equal(fixture.guard, unsafeContractAddress("CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7"));
+    assert.equal(
+      fixture.guard,
+      unsafeContractAddress("CAYJZT4XH5SWDXNR7MZJCCUBIDAT2KZDDUTZ7OZQEMKCPJGD4P3X4CU7"),
+    );
     assert.match(fixture.policyInstallTransaction, /^[0-9a-f]{64}$/);
 
     const expected: PolicyConfig = {
@@ -603,13 +606,19 @@ describe("decodePolicy", () => {
 
   it("rejects duplicate, unknown, and unsorted fields", () => {
     const entries = mapEntries(policyToScVal(samplePolicy()));
-    const duplicate = new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("active_from"), val: xdr.ScVal.scvU64(1n) });
+    const duplicate = new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("active_from"),
+      val: xdr.ScVal.scvU64(1n),
+    });
     assert.throws(
       () => decodePolicy(xdr.ScVal.scvMap([entries[0]!, duplicate])),
       /duplicate field "active_from"/,
     );
 
-    const unknown = new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("zzzz"), val: xdr.ScVal.scvBool(true) });
+    const unknown = new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("zzzz"),
+      val: xdr.ScVal.scvBool(true),
+    });
     assert.throws(
       () => decodePolicy(xdr.ScVal.scvMap([...entries, unknown])),
       /unknown field "zzzz"/,
@@ -686,7 +695,8 @@ describe("policy JSON codec", () => {
     );
     assert.throws(
       () => policyFromJson({ ...encoded, protocols: [{ contract: TOKEN, fns: [], extra: true }] }),
-      (error: unknown) => error instanceof PolicyDecodeError && error.path === "policy.protocols[0].extra",
+      (error: unknown) =>
+        error instanceof PolicyDecodeError && error.path === "policy.protocols[0].extra",
     );
   });
 });
@@ -723,10 +733,9 @@ describe("decodeCheckResult", () => {
   it("decodes the raw ScVal the contract returns (ScVec enum encoding)", () => {
     // `simulation.returnValue` is an xdr.ScVal, not a native value: a
     // `#[contracttype]` enum crosses the wire as `ScVec([variant, payload…])`.
-    assert.deepEqual(
-      decodeCheckResult(xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Allowed")])),
-      { kind: "allowed" },
-    );
+    assert.deepEqual(decodeCheckResult(xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Allowed")])), {
+      kind: "allowed",
+    });
     assert.deepEqual(
       decodeCheckResult(
         xdr.ScVal.scvVec([
@@ -762,7 +771,9 @@ describe("decodeCheckResult", () => {
 
   it("falls back to undetermined on a malformed ScVec (wrong length)", () => {
     assert.deepEqual(
-      decodeCheckResult(xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Allowed"), xdr.ScVal.scvSymbol("extra")])),
+      decodeCheckResult(
+        xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Allowed"), xdr.ScVal.scvSymbol("extra")]),
+      ),
       { kind: "undetermined" },
     );
   });
@@ -814,9 +825,12 @@ describe("decodeCheckResult", () => {
     ];
     for (const val of hostile) {
       let result: unknown;
-      assert.doesNotThrow(() => {
-        result = decodeCheckResult(val);
-      }, `decodeCheckResult threw on ${JSON.stringify(val.toXDR("base64"))}`);
+      assert.doesNotThrow(
+        () => {
+          result = decodeCheckResult(val);
+        },
+        `decodeCheckResult threw on ${JSON.stringify(val.toXDR("base64"))}`,
+      );
       assert.ok(
         result !== undefined && result !== null,
         `decodeCheckResult returned nullish on ${JSON.stringify(val.toXDR("base64"))}`,
@@ -848,7 +862,10 @@ describe("dead-man switch helpers", () => {
   });
 
   it("reports positive remaining time while still inside grace", () => {
-    assert.equal(deadManRemaining(status({ now: 1002n }), samplePolicy({ dms_grace_secs: 5n })), 3n);
+    assert.equal(
+      deadManRemaining(status({ now: 1002n }), samplePolicy({ dms_grace_secs: 5n })),
+      3n,
+    );
   });
 
   it("reports null when the switch is disabled", () => {
@@ -893,7 +910,10 @@ describe("dead-man switch helpers", () => {
     });
 
     it("reports null remaining time — never is not expired", () => {
-      assert.equal(deadManRemaining(neverHeartbeated(), samplePolicy({ dms_grace_secs: 100n })), null);
+      assert.equal(
+        deadManRemaining(neverHeartbeated(), samplePolicy({ dms_grace_secs: 100n })),
+        null,
+      );
     });
 
     it("reports null remaining time even when the switch is armed and unexpired flags disagree", () => {
@@ -949,7 +969,10 @@ describe("dead-man switch helpers", () => {
       // consistent here because the same derivation produced both.
       assert.equal(
         deadManRemaining(status({ last_heartbeat: 1000n, now: 1101n }), policy),
-        deadManRemaining(status({ last_heartbeat: 1000n, now: 1101n, heartbeat_expired: true }), policy),
+        deadManRemaining(
+          status({ last_heartbeat: 1000n, now: 1101n, heartbeat_expired: true }),
+          policy,
+        ),
       );
     });
   });
@@ -1097,27 +1120,24 @@ describe("describePolicy advanced constraints (issue #343)", () => {
   });
 
   it("reports an open active window as active", () => {
-    const text = describePolicy(
-      samplePolicy({ active_from: 1_000n, active_until: 2_000n }),
-      { nowSecs: 1_500 },
-    );
+    const text = describePolicy(samplePolicy({ active_from: 1_000n, active_until: 2_000n }), {
+      nowSecs: 1_500,
+    });
     assert.match(text, /active window .* -> .*\(active\)/);
     assert.match(text, /1970-01-01T00:16:40.000Z/, "the start bound is rendered as a timestamp");
   });
 
   it("reports a window that has not opened yet", () => {
-    const text = describePolicy(
-      samplePolicy({ active_from: 2_000n, active_until: 3_000n }),
-      { nowSecs: 1_500 },
-    );
+    const text = describePolicy(samplePolicy({ active_from: 2_000n, active_until: 3_000n }), {
+      nowSecs: 1_500,
+    });
     assert.match(text, /\(scheduled\)/);
   });
 
   it("reports a window that has closed", () => {
-    const text = describePolicy(
-      samplePolicy({ active_from: 1_000n, active_until: 2_000n }),
-      { nowSecs: 2_000 },
-    );
+    const text = describePolicy(samplePolicy({ active_from: 1_000n, active_until: 2_000n }), {
+      nowSecs: 2_000,
+    });
     assert.match(text, /\(expired\)/);
   });
 
@@ -1160,18 +1180,21 @@ describe("address decoding", () => {
 });
 
 describe("validateGuardPolicy (SPEC §8)", () => {
-  it("passes parity check against vendored policy-rule-ids.json fixture", async () => {
+  it("matches the contract fixture plus the SDK-only wire-range rule", async () => {
     const fixturePath = new URL("../fixtures/policy-rule-ids.json", import.meta.url);
     const content = JSON.parse(await readFile(fixturePath, "utf-8")) as {
       rules: Array<{ id: string; specSection: string; description: string }>;
     };
     const fixtureIds = content.rules.map((r) => r.id).sort();
-    const declaredIds = [...POLICY_RULE_IDS].sort();
+    const declaredIds = [...POLICY_RULE_IDS]
+      .filter((rule) => rule !== "integer_out_of_range")
+      .sort();
     assert.deepEqual(
       declaredIds,
       fixtureIds,
-      "POLICY_RULE_IDS must exactly match vendored fixture both ways",
+      "SPEC rule ids must exactly match the vendored contract fixture",
     );
+    assert.ok(POLICY_RULE_IDS.includes("integer_out_of_range"));
   });
 
   it("returns zero failures for a valid policy", () => {
@@ -1217,7 +1240,9 @@ describe("validateGuardPolicy (SPEC §8)", () => {
       });
       assert.ok(failures.some((f) => f.path === "per_tx_cap" && f.rule === "invalid_type"));
       assert.ok(failures.some((f) => f.path === "paused" && f.rule === "invalid_type"));
-      assert.ok(failures.some((f) => f.path === "allow_any_recipient" && f.rule === "invalid_type"));
+      assert.ok(
+        failures.some((f) => f.path === "allow_any_recipient" && f.rule === "invalid_type"),
+      );
     });
 
     it("rejects invalid Stellar addresses", () => {
@@ -1262,7 +1287,82 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         ...samplePolicy(),
         recipient_window_caps: [{ recipient: RECIPIENT, cap: -100n }],
       });
-      assert.ok(failures.some((f) => f.path === "recipient_window_caps[0].cap" && f.rule === "negative_amount"));
+      assert.ok(
+        failures.some(
+          (f) => f.path === "recipient_window_caps[0].cap" && f.rule === "negative_amount",
+        ),
+      );
+    });
+  });
+
+  describe("wire integer bounds", () => {
+    it("accepts exact i128/u64 maxima across all policy numeric fields", () => {
+      const maximumI128 = 2n ** 127n - 1n;
+      const maximumU64 = 2n ** 64n - 1n;
+      assert.deepEqual(
+        validateGuardPolicy(
+          samplePolicy({
+            per_tx_cap: 0n,
+            window_secs: 0n,
+            window_cap: 0n,
+            active_from: 0n,
+            active_until: 0n,
+            dms_grace_secs: 0n,
+            recipient_window_caps: [{ recipient: RECIPIENT, cap: 0n }],
+          }),
+        ),
+        [],
+      );
+      const failures = validateGuardPolicy(
+        samplePolicy({
+          per_tx_cap: maximumI128.toString() as unknown as bigint,
+          window_secs: maximumU64,
+          window_cap: maximumI128,
+          active_from: maximumU64.toString() as unknown as bigint,
+          active_until: 0n,
+          dms_grace_secs: maximumU64.toString() as unknown as bigint,
+          recipient_window_caps: [
+            { recipient: RECIPIENT, cap: maximumI128.toString() as unknown as bigint },
+          ],
+        }),
+      );
+      assert.deepEqual(failures, []);
+      assert.deepEqual(
+        validateGuardPolicy(samplePolicy({ active_from: 0n, active_until: maximumU64 })),
+        [],
+      );
+    });
+
+    it("rejects one-past-max i128/u64 values with the same range rule", () => {
+      const maximumI128 = 2n ** 127n - 1n;
+      const maximumU64 = 2n ** 64n - 1n;
+      const failures = validateGuardPolicy(
+        samplePolicy({
+          per_tx_cap: maximumI128 + 1n,
+          window_secs: (maximumU64 + 1n).toString() as unknown as bigint,
+          window_cap: (maximumI128 + 1n).toString() as unknown as bigint,
+          active_from: maximumU64 + 1n,
+          active_until: (maximumU64 + 1n).toString() as unknown as bigint,
+          dms_grace_secs: maximumU64 + 1n,
+          recipient_window_caps: [
+            { recipient: RECIPIENT, cap: (maximumI128 + 1n).toString() as unknown as bigint },
+          ],
+        }),
+      );
+      assert.deepEqual(
+        failures
+          .filter((failure) => failure.rule === "integer_out_of_range")
+          .map((failure) => failure.path),
+        [
+          "per_tx_cap",
+          "window_secs",
+          "window_cap",
+          "recipient_window_caps[0].cap",
+          "active_from",
+          "active_until",
+          "dms_grace_secs",
+        ],
+      );
     });
   });
 
@@ -1284,7 +1384,12 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         ...samplePolicy({ window_cap: 0n, window_secs: 0n }),
         recipient_window_caps: [{ recipient: RECIPIENT, cap: 200n }],
       });
-      assert.ok(failures.some((f) => f.path === "recipient_window_caps[0].cap" && f.rule === "recipient_cap_requires_window"));
+      assert.ok(
+        failures.some(
+          (f) =>
+            f.path === "recipient_window_caps[0].cap" && f.rule === "recipient_cap_requires_window",
+        ),
+      );
     });
   });
 
@@ -1301,12 +1406,16 @@ describe("validateGuardPolicy (SPEC §8)", () => {
 
     it("rejects active_until equal to active_from", () => {
       const failures = validateGuardPolicy(samplePolicy({ active_from: 100n, active_until: 100n }));
-      assert.ok(failures.some((f) => f.path === "active_until" && f.rule === "active_window_inverted"));
+      assert.ok(
+        failures.some((f) => f.path === "active_until" && f.rule === "active_window_inverted"),
+      );
     });
 
     it("rejects active_until less than active_from", () => {
       const failures = validateGuardPolicy(samplePolicy({ active_from: 100n, active_until: 50n }));
-      assert.ok(failures.some((f) => f.path === "active_until" && f.rule === "active_window_inverted"));
+      assert.ok(
+        failures.some((f) => f.path === "active_until" && f.rule === "active_window_inverted"),
+      );
     });
   });
 
@@ -1317,12 +1426,16 @@ describe("validateGuardPolicy (SPEC §8)", () => {
     });
 
     it("flags empty recipients list when allow_any_recipient is false", () => {
-      const failures = validateGuardPolicy(samplePolicy({ recipients: [], allow_any_recipient: false }));
+      const failures = validateGuardPolicy(
+        samplePolicy({ recipients: [], allow_any_recipient: false }),
+      );
       assert.ok(failures.some((f) => f.path === "recipients" && f.rule === "empty_vector_noop"));
     });
 
     it("allows empty recipients list when allow_any_recipient is true", () => {
-      const failures = validateGuardPolicy(samplePolicy({ recipients: [], allow_any_recipient: true }));
+      const failures = validateGuardPolicy(
+        samplePolicy({ recipients: [], allow_any_recipient: true }),
+      );
       assert.deepEqual(failures, []);
     });
 
@@ -1332,7 +1445,11 @@ describe("validateGuardPolicy (SPEC §8)", () => {
           protocols: [{ contract: TOKEN, fns: [] }],
         }),
       );
-      assert.ok(failures.some((f) => f.path === "protocols[0].fns" && f.rule === "empty_protocol_functions"));
+      assert.ok(
+        failures.some(
+          (f) => f.path === "protocols[0].fns" && f.rule === "empty_protocol_functions",
+        ),
+      );
     });
   });
 
@@ -1344,7 +1461,9 @@ describe("validateGuardPolicy (SPEC §8)", () => {
 
     it("rejects duplicate recipients", () => {
       const failures = validateGuardPolicy(samplePolicy({ recipients: [RECIPIENT, RECIPIENT] }));
-      assert.ok(failures.some((f) => f.path === "recipients[1]" && f.rule === "duplicate_recipient"));
+      assert.ok(
+        failures.some((f) => f.path === "recipients[1]" && f.rule === "duplicate_recipient"),
+      );
     });
 
     it("rejects duplicate blocked_recipients", () => {
@@ -1352,7 +1471,11 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         ...samplePolicy(),
         blocked_recipients: [TOKEN, TOKEN],
       });
-      assert.ok(failures.some((f) => f.path === "blocked_recipients[1]" && f.rule === "duplicate_blocked_recipient"));
+      assert.ok(
+        failures.some(
+          (f) => f.path === "blocked_recipients[1]" && f.rule === "duplicate_blocked_recipient",
+        ),
+      );
     });
 
     it("rejects duplicate protocol contracts", () => {
@@ -1364,7 +1487,9 @@ describe("validateGuardPolicy (SPEC §8)", () => {
           ],
         }),
       );
-      assert.ok(failures.some((f) => f.path === "protocols[1].contract" && f.rule === "duplicate_protocol"));
+      assert.ok(
+        failures.some((f) => f.path === "protocols[1].contract" && f.rule === "duplicate_protocol"),
+      );
     });
 
     it("rejects duplicate protocol functions within a rule", () => {
@@ -1373,7 +1498,11 @@ describe("validateGuardPolicy (SPEC §8)", () => {
           protocols: [{ contract: TOKEN, fns: ["transfer", "transfer"] }],
         }),
       );
-      assert.ok(failures.some((f) => f.path === "protocols[0].fns[1]" && f.rule === "duplicate_protocol_function"));
+      assert.ok(
+        failures.some(
+          (f) => f.path === "protocols[0].fns[1]" && f.rule === "duplicate_protocol_function",
+        ),
+      );
     });
   });
 
@@ -1386,7 +1515,13 @@ describe("validateGuardPolicy (SPEC §8)", () => {
           { recipient: RECIPIENT, cap: 200n },
         ],
       });
-      assert.ok(failures.some((f) => f.path === "recipient_window_caps[1].recipient" && f.rule === "duplicate_recipient_window_cap"));
+      assert.ok(
+        failures.some(
+          (f) =>
+            f.path === "recipient_window_caps[1].recipient" &&
+            f.rule === "duplicate_recipient_window_cap",
+        ),
+      );
     });
   });
 
@@ -1396,7 +1531,11 @@ describe("validateGuardPolicy (SPEC §8)", () => {
       const failures = validateGuardPolicy(samplePolicy({ recipients: oversized }), {
         maxRecipientEntries: 2,
       });
-      assert.ok(failures.some((f) => f.path === "recipients" && f.rule === "max_recipient_entries_exceeded"));
+      assert.ok(
+        failures.some(
+          (f) => f.path === "recipients" && f.rule === "max_recipient_entries_exceeded",
+        ),
+      );
     });
   });
 
@@ -1406,13 +1545,17 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         ...samplePolicy({ recipients: [RECIPIENT] }),
         blocked_recipients: [RECIPIENT],
       });
-      assert.ok(failures.some((f) => f.path === "blocked_recipients[0]" && f.rule === "recipient_conflict"));
+      assert.ok(
+        failures.some((f) => f.path === "blocked_recipients[0]" && f.rule === "recipient_conflict"),
+      );
     });
   });
 
   describe("SPEC §8 bullet 10: self-address rejection", () => {
     it("rejects guard contract address in assets", () => {
-      const failures = validateGuardPolicy(samplePolicy({ assets: [GUARD] }), { guardAddress: GUARD });
+      const failures = validateGuardPolicy(samplePolicy({ assets: [GUARD] }), {
+        guardAddress: GUARD,
+      });
       assert.ok(failures.some((f) => f.path === "assets[0]" && f.rule === "self_as_asset"));
     });
 
@@ -1421,11 +1564,15 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         samplePolicy({ protocols: [{ contract: GUARD, fns: null }] }),
         GUARD,
       );
-      assert.ok(failures.some((f) => f.path === "protocols[0].contract" && f.rule === "self_as_protocol"));
+      assert.ok(
+        failures.some((f) => f.path === "protocols[0].contract" && f.rule === "self_as_protocol"),
+      );
     });
 
     it("rejects guard contract address in recipients", () => {
-      const failures = validateGuardPolicy(samplePolicy({ recipients: [RECIPIENT] }), { guardAddress: GUARD });
+      const failures = validateGuardPolicy(samplePolicy({ recipients: [RECIPIENT] }), {
+        guardAddress: GUARD,
+      });
       // Note: RECIPIENT is a valid account address and should not trigger this error.
       // This test is checking that the guard address validation works correctly.
       assert.ok(failures.length >= 0); // Just verify it doesn't throw
@@ -1436,7 +1583,9 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         { ...samplePolicy({ recipients: [RECIPIENT] }), blocked_recipients: [GUARD] },
         { guardAddress: GUARD },
       );
-      assert.ok(failures.some((f) => f.path === "blocked_recipients[0]" && f.rule === "self_as_recipient"));
+      assert.ok(
+        failures.some((f) => f.path === "blocked_recipients[0]" && f.rule === "self_as_recipient"),
+      );
     });
 
     it("rejects guard contract address in recipient_window_caps", () => {
@@ -1444,7 +1593,12 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         { ...samplePolicy(), recipient_window_caps: [{ recipient: GUARD, cap: 100n }] },
         { guardAddress: GUARD },
       );
-      assert.ok(failures.some((f) => f.path === "recipient_window_caps[0].recipient" && f.rule === "self_as_recipient_cap"));
+      assert.ok(
+        failures.some(
+          (f) =>
+            f.path === "recipient_window_caps[0].recipient" && f.rule === "self_as_recipient_cap",
+        ),
+      );
     });
   });
 
@@ -1510,7 +1664,9 @@ describe("validateGuardPolicy (SPEC §8)", () => {
 
     it("rejects a non-array recipient_window_caps", () => {
       const failures = validateGuardPolicy({ ...samplePolicy(), recipient_window_caps: 7 });
-      assert.ok(failures.some((f) => f.path === "recipient_window_caps" && f.rule === "invalid_type"));
+      assert.ok(
+        failures.some((f) => f.path === "recipient_window_caps" && f.rule === "invalid_type"),
+      );
     });
 
     it("rejects recipient_window_caps beyond maxRecipientEntries", () => {
@@ -1526,8 +1682,7 @@ describe("validateGuardPolicy (SPEC §8)", () => {
       );
       assert.ok(
         failures.some(
-          (f) =>
-            f.path === "recipient_window_caps" && f.rule === "max_recipient_entries_exceeded",
+          (f) => f.path === "recipient_window_caps" && f.rule === "max_recipient_entries_exceeded",
         ),
       );
     });
@@ -1627,9 +1782,7 @@ describe("validateGuardPolicy (SPEC §8)", () => {
         protocols: [{ contract: "not-a-stellar-address", fns: null }],
       });
       assert.ok(
-        failures.some(
-          (f) => f.path === "protocols[0].contract" && f.rule === "invalid_address",
-        ),
+        failures.some((f) => f.path === "protocols[0].contract" && f.rule === "invalid_address"),
       );
     });
 
@@ -1662,11 +1815,94 @@ describe("validateGuardPolicy (SPEC §8)", () => {
   });
 });
 
+/**
+ * `freezePolicy` returns a frozen **copy**: the caller keeps ownership of the
+ * object it passed in (issue #293). Every assertion below is therefore about
+ * two separate values — the input, which must stay editable, and the returned
+ * policy, which must be immutable all the way down.
+ */
 describe("freezePolicy", () => {
-  it("returns the same object reference (no copy)", () => {
+  /** A policy carrying every nested collection, so each one can be checked. */
+  function fullPolicy(): PolicyConfig {
+    return samplePolicy({
+      protocols: [
+        { contract: TOKEN, fns: ["transfer", "approve"] },
+        { contract: GUARD, fns: null },
+      ],
+      recipient_window_caps: [{ recipient: RECIPIENT, cap: 10n }],
+      blocked_recipients: [RECIPIENT],
+    });
+  }
+
+  it("returns a distinct object with the same contents (does not return the input)", () => {
     const policy = samplePolicy();
     const frozen = freezePolicy(policy);
-    assert.equal(frozen, policy as unknown);
+    assert.notEqual(frozen, policy as unknown);
+    assert.deepEqual(frozen, policy);
+    assert.ok(Object.isFrozen(frozen));
+  });
+
+  it("leaves the caller's top-level object editable", () => {
+    const policy = samplePolicy();
+    freezePolicy(policy);
+    assert.equal(Object.isFrozen(policy), false);
+    policy.per_tx_cap = 9999n;
+    policy.paused = true;
+    assert.equal(policy.per_tx_cap, 9999n);
+    assert.equal(policy.paused, true);
+  });
+
+  it("leaves every nested collection of the caller's policy editable", () => {
+    const policy = fullPolicy();
+    freezePolicy(policy);
+
+    policy.assets.push(TOKEN);
+    policy.recipients.push(RECIPIENT);
+    policy.protocols.push({ contract: TOKEN, fns: null });
+    policy.protocols[0]!.fns!.push("swap");
+    policy.protocols[0]!.contract = TOKEN;
+    policy.recipient_window_caps!.push({ recipient: RECIPIENT, cap: 20n });
+    policy.recipient_window_caps![0]!.cap = 99n;
+    policy.blocked_recipients!.push(RECIPIENT);
+
+    assert.equal(policy.assets.length, 2);
+    assert.equal(policy.recipients.length, 2);
+    assert.equal(policy.protocols.length, 3);
+    assert.deepEqual(policy.protocols[0]!.fns, ["transfer", "approve", "swap"]);
+    assert.equal(policy.recipient_window_caps![1]!.cap, 20n);
+    assert.equal(policy.blocked_recipients!.length, 2);
+  });
+
+  it("shares no nested references with the caller's policy", () => {
+    const policy = fullPolicy();
+    const frozen = freezePolicy(policy);
+    const frozenProtocols = frozen.protocols as unknown as PolicyConfig["protocols"];
+    const frozenCaps = frozen.recipient_window_caps as unknown as RecipientWindowCap[];
+
+    assert.notEqual(frozen.assets, policy.assets);
+    assert.notEqual(frozen.recipients, policy.recipients);
+    assert.notEqual(frozen.protocols, policy.protocols);
+    assert.notEqual(frozenProtocols[0], policy.protocols[0]);
+    assert.notEqual(frozenProtocols[0]!.fns, policy.protocols[0]!.fns);
+    assert.notEqual(frozen.recipient_window_caps, policy.recipient_window_caps);
+    assert.notEqual(frozenCaps[0], policy.recipient_window_caps![0]);
+    // Addresses are immutable string primitives, so the arrays are copies while
+    // the elements are intentionally the same values — sharing them is safe.
+    assert.notEqual(frozen.blocked_recipients, policy.blocked_recipients);
+  });
+
+  it("editing the caller's policy after the call does not change the returned copy", () => {
+    const policy = fullPolicy();
+    const before = structuredClone(policy);
+    const frozen = freezePolicy(policy);
+
+    policy.assets.push(TOKEN);
+    policy.recipients.push(RECIPIENT);
+    policy.protocols[0]!.fns!.push("swap");
+    policy.recipient_window_caps![0]!.cap = 99n;
+    policy.blocked_recipients!.push(RECIPIENT);
+
+    assert.deepEqual(frozen, before);
   });
 
   it("freezes the top-level object — mutation throws in strict mode (ESM = strict)", () => {
@@ -1678,16 +1914,35 @@ describe("freezePolicy", () => {
 
   it("freezes the assets array — push throws", () => {
     const frozen = freezePolicy(samplePolicy());
+    assert.ok(Object.isFrozen(frozen.assets));
     assert.throws(() => {
       (frozen.assets as ContractAddress[]).push(TOKEN);
     }, TypeError);
   });
 
+  it("freezes the recipients array — push throws", () => {
+    const frozen = freezePolicy(samplePolicy());
+    assert.ok(Object.isFrozen(frozen.recipients));
+    assert.throws(() => {
+      (frozen.recipients as AccountAddress[]).push(RECIPIENT);
+    }, TypeError);
+  });
+
   it("freezes protocol rule objects and their fns arrays", () => {
     const policy = samplePolicy({
-      protocols: [{ contract: TOKEN, fns: ["transfer"] }],
+      protocols: [
+        { contract: TOKEN, fns: ["transfer"] },
+        { contract: GUARD, fns: null },
+      ],
     });
     const frozen = freezePolicy(policy);
+    assert.ok(Object.isFrozen(frozen.protocols));
+    assert.ok(Object.isFrozen(frozen.protocols[0]));
+    assert.ok(Object.isFrozen(frozen.protocols[0]!.fns));
+    assert.equal(frozen.protocols[1]!.fns, null);
+    assert.throws(() => {
+      (frozen.protocols as ProtocolRule[]).push({ contract: TOKEN, fns: null });
+    }, TypeError);
     assert.throws(() => {
       (frozen.protocols[0]!.fns as string[]).push("swap");
     }, TypeError);
@@ -1701,6 +1956,8 @@ describe("freezePolicy", () => {
     const frozen = freezePolicy(samplePolicy({ recipient_window_caps: caps }));
     const frozenCaps = (frozen as unknown as { recipient_window_caps: RecipientWindowCap[] })
       .recipient_window_caps;
+    assert.ok(Object.isFrozen(frozenCaps));
+    assert.ok(Object.isFrozen(frozenCaps[0]));
     assert.throws(() => {
       frozenCaps.push({ recipient: RECIPIENT, cap: 20n });
     }, TypeError);
@@ -1709,8 +1966,33 @@ describe("freezePolicy", () => {
     }, TypeError);
   });
 
-  it("still encodes correctly after freeze", () => {
+  it("freezes the blocked_recipients array — push throws", () => {
+    const frozen = freezePolicy(samplePolicy({ blocked_recipients: [RECIPIENT] }));
+    assert.ok(Object.isFrozen(frozen.blocked_recipients));
+    assert.throws(() => {
+      (frozen as unknown as { blocked_recipients: AccountAddress[] }).blocked_recipients.push(
+        RECIPIENT,
+      );
+    }, TypeError);
+  });
+
+  it("does not invent optional collections the caller omitted", () => {
     const frozen = freezePolicy(samplePolicy());
+    assert.equal(Object.hasOwn(frozen, "recipient_window_caps"), false);
+    assert.equal(Object.hasOwn(frozen, "blocked_recipients"), false);
+  });
+
+  it("is safe to call on a policy that was already frozen", () => {
+    const first = freezePolicy(fullPolicy());
+    // Re-freezing a returned policy is a no-op value-wise: a fresh copy is
+    // produced, so nothing is mutated and nothing throws.
+    const second = freezePolicy(structuredClone(first) as unknown as PolicyConfig);
+    assert.deepEqual(second, first);
+    assert.ok(Object.isFrozen(second));
+  });
+
+  it("still encodes correctly after freeze", () => {
+    const frozen = freezePolicy(fullPolicy());
     assert.doesNotThrow(() => policyToScVal(frozen));
   });
 
@@ -1894,8 +2176,16 @@ describe("policyToScVal property tests (seeded, issue #48)", () => {
         const entries = mapEntries(policyToScVal(policy));
         const keys = entries.map((entry) => String(scValToNative(entry.key)));
 
-        assert.deepEqual(keys, [...POLICY_FIELD_LIST], "encoded key set must equal the committed field list");
-        assert.deepEqual(keys, [...keys].sort(), "encoded keys must be sorted for host struct conversion");
+        assert.deepEqual(
+          keys,
+          [...POLICY_FIELD_LIST],
+          "encoded key set must equal the committed field list",
+        );
+        assert.deepEqual(
+          keys,
+          [...keys].sort(),
+          "encoded keys must be sorted for host struct conversion",
+        );
 
         for (const entry of entries) {
           const name = String(scValToNative(entry.key));
@@ -1905,26 +2195,48 @@ describe("policyToScVal property tests (seeded, issue #48)", () => {
           }
         }
 
-        const protocolsEntry = entries.find((entry) => String(scValToNative(entry.key)) === "protocols")!;
+        const protocolsEntry = entries.find(
+          (entry) => String(scValToNative(entry.key)) === "protocols",
+        )!;
         const rules = (protocolsEntry.val as unknown as { vec?: xdr.ScVal[] }).vec ?? [];
         assert.equal(rules.length, policy.protocols.length, "every protocol rule must be encoded");
         rules.forEach((rule, index) => {
           const ruleEntries = mapEntries(rule);
           const ruleKeys = ruleEntries.map((entry) => String(scValToNative(entry.key)));
-          assert.deepEqual(ruleKeys, ["contract", "fns", "paused"], `protocols[${index}] rule shape`);
+          assert.deepEqual(
+            ruleKeys,
+            ["contract", "fns", "paused"],
+            `protocols[${index}] rule shape`,
+          );
 
-          const contract = ruleEntries.find((entry) => String(scValToNative(entry.key)) === "contract")!;
+          const contract = ruleEntries.find(
+            (entry) => String(scValToNative(entry.key)) === "contract",
+          )!;
           const fns = ruleEntries.find((entry) => String(scValToNative(entry.key)) === "fns")!;
-          const rulePaused = ruleEntries.find((entry) => String(scValToNative(entry.key)) === "paused")!;
-          assert.equal(contract.val.type, "scvAddress", `protocols[${index}].contract must be an address`);
+          const rulePaused = ruleEntries.find(
+            (entry) => String(scValToNative(entry.key)) === "paused",
+          )!;
+          assert.equal(
+            contract.val.type,
+            "scvAddress",
+            `protocols[${index}].contract must be an address`,
+          );
           assert.equal(rulePaused.val.type, "scvBool", `protocols[${index}].paused must be a bool`);
 
           if (policy.protocols[index]!.fns === null) {
-            assert.equal(fns.val.type, "scvVoid", `protocols[${index}].fns null must encode as Void`);
+            assert.equal(
+              fns.val.type,
+              "scvVoid",
+              `protocols[${index}].fns null must encode as Void`,
+            );
           } else {
             assert.equal(fns.val.type, "scvVec", `protocols[${index}].fns must be a vector`);
             for (const fn of (fns.val as unknown as { vec?: xdr.ScVal[] }).vec ?? []) {
-              assert.equal(fn.type, "scvSymbol", `protocols[${index}] function name must be a symbol`);
+              assert.equal(
+                fn.type,
+                "scvSymbol",
+                `protocols[${index}] function name must be a symbol`,
+              );
             }
           }
         });

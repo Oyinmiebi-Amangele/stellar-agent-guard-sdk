@@ -241,20 +241,17 @@ function resourceCount(value: unknown): number | undefined {
     return value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
   }
   if (typeof value === "string" && value.trim() === "") return undefined;
-  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  const number =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isSafeInteger(number) && number >= 0 ? number : undefined;
 }
 
-function footprintCounts(value: unknown):
-  | { readOnlyEntries: number; readWriteEntries: number; storageEntries: number }
-  | undefined {
+function footprintCounts(
+  value: unknown,
+): { readOnlyEntries: number; readWriteEntries: number; storageEntries: number } | undefined {
   const footprint = recordOf(value);
-  const readOnly = footprint
-    ? firstDefined(footprint, "readOnly", "read_only")
-    : undefined;
-  const readWrite = footprint
-    ? firstDefined(footprint, "readWrite", "read_write")
-    : undefined;
+  const readOnly = footprint ? firstDefined(footprint, "readOnly", "read_only") : undefined;
+  const readWrite = footprint ? firstDefined(footprint, "readWrite", "read_write") : undefined;
   if (!Array.isArray(readOnly) || !Array.isArray(readWrite)) return undefined;
   const readOnlyEntries = readOnly.length;
   const readWriteEntries = readWrite.length;
@@ -273,7 +270,9 @@ function footprintCounts(value: unknown):
  * object used by recorded RPC fixtures. Missing or malformed fields return
  * `undefined` as a whole, never a partially fabricated zero-filled breakdown.
  */
-export function resourceBreakdownFromSimulation(simulation: unknown): ResourceBreakdown | undefined {
+export function resourceBreakdownFromSimulation(
+  simulation: unknown,
+): ResourceBreakdown | undefined {
   const response = recordOf(simulation);
   const transactionData = response?.transactionData ?? simulation;
   let transaction: Record<string, unknown> | undefined;
@@ -302,9 +301,7 @@ export function resourceBreakdownFromSimulation(simulation: unknown): ResourceBr
   if (!builtRecord) return undefined;
   const resources = recordOf(builtRecord.resources) ?? builtRecord;
   const instructions = resourceCount(resources.instructions);
-  const diskReadBytes = resourceCount(
-    firstDefined(resources, "diskReadBytes", "disk_read_bytes"),
-  );
+  const diskReadBytes = resourceCount(firstDefined(resources, "diskReadBytes", "disk_read_bytes"));
   const writeBytes = resourceCount(firstDefined(resources, "writeBytes", "write_bytes"));
   const footprint = footprintCounts(resources.footprint);
   if (
@@ -342,6 +339,8 @@ export interface CostPreCheckConfig {
    * Omitted means "price it, never object to the price". `0n` is a real
    * ceiling, distinct from omission: every quoted total (which includes the
    * inclusion fee) is then over budget.
+   *
+   * Default: none (no ceiling).
    */
   maxFeeStroops?: bigint | undefined;
   /**
@@ -356,11 +355,13 @@ export interface CostPreCheckConfig {
   /**
    * Opt-in policy source (contract address string or PolicyConfig/GuardPolicy).
    * When provided, `policyContext` is populated with policy-relative context.
-   * When omitted or null, `policyContext` is `null`.
+   * When omitted or null, `policyContext` is `null`. Informational only: it
+   * never changes the cost decision. Default: none.
    */
   policySource?: string | PolicyConfig | null | undefined;
   /**
-   * Optional policy or contract address. Alias for `policySource`.
+   * Optional policy or contract address. Alias for `policySource`, which wins
+   * when both are set. Default: none.
    */
   policy?: string | PolicyConfig | null | undefined;
   /**
@@ -371,6 +372,8 @@ export interface CostPreCheckConfig {
    * changes the cost decision itself. An invalid snapshot (negative ledger, or
    * cap/spent that is not a non-negative `bigint`) throws a `TypeError` at
    * construction, mirroring the fee-ceiling validation boundary.
+   *
+   * Default: none (`windowRemainingEstimate` is `null`, meaning unknown).
    */
   windowSnapshot?: WindowSpendSnapshot | null | undefined;
   /**
@@ -470,14 +473,21 @@ export type CostPreCheckResult = CostDecision;
  * Per-call options for cost checking, including fee ceilings and opt-in policy context.
  */
 export interface CostPreCheckOptions {
-  /** Opt-in policy source (contract address or PolicyConfig/GuardPolicy). */
+  /**
+   * Opt-in policy source (contract address or PolicyConfig/GuardPolicy).
+   * Default: the configured `CostPreCheckConfig.policySource` / `policy`.
+   */
   policySource?: string | PolicyConfig | null | undefined;
-  /** Optional policy or contract address. Alias for `policySource`. */
+  /**
+   * Optional policy or contract address. Alias for `policySource`, which wins
+   * when both are set. Default: as `policySource`.
+   */
   policy?: string | PolicyConfig | null | undefined;
   /**
    * Override the fee ceiling in stroops for this check. Must be a non-negative
    * `bigint`; invalid values throw `InvalidFeeCeilingError` before the
    * interceptor is called. `0n` is a real ceiling, distinct from omission.
+   * Default: the configured `CostPreCheckConfig.maxFeeStroops`.
    */
   maxFeeStroops?: bigint | undefined;
   /**
@@ -492,11 +502,13 @@ export interface CostPreCheckOptions {
    * already-aborted signal returns before any RPC call; a mid-flight abort or a
    * fired timeout yields a fail-closed `undetermined` verdict (and therefore an
    * `undetermined` cost decision) carrying the typed `RpcTimeoutError`.
+   * Default: none.
    */
   signal?: AbortSignal | undefined;
   /**
    * Bound on the underlying RPC call, in milliseconds; `0` disables it. A fired
    * timeout is reported exactly like an abort — never as an admissible verdict.
+   * Default: `DEFAULT_RPC_TIMEOUT_MS` (30 000 ms), applied by the interceptor.
    */
   timeoutMs?: number | undefined;
 }
@@ -615,7 +627,11 @@ function validateWindowSnapshot(snapshot: WindowSpendSnapshot): WindowSpendSnaps
       `windowSnapshot must be an object, received ${snapshot === null ? "null" : typeof snapshot}`,
     );
   }
-  if (typeof snapshot.ledger !== "number" || !Number.isSafeInteger(snapshot.ledger) || snapshot.ledger < 0) {
+  if (
+    typeof snapshot.ledger !== "number" ||
+    !Number.isSafeInteger(snapshot.ledger) ||
+    snapshot.ledger < 0
+  ) {
     throw new TypeError(
       `windowSnapshot.ledger must be a non-negative safe integer, received ${String(snapshot.ledger)}`,
     );
@@ -781,9 +797,7 @@ export class CostPreChecker {
     // Validate at the configuration boundary: a typo must fail here, not turn
     // every later quote into a fabricated over-budget answer.
     this.maxFeeStroops =
-      config.maxFeeStroops === undefined
-        ? undefined
-        : validateFeeCeiling(config.maxFeeStroops);
+      config.maxFeeStroops === undefined ? undefined : validateFeeCeiling(config.maxFeeStroops);
     this.windowSnapshot =
       config.windowSnapshot === undefined || config.windowSnapshot === null
         ? null
@@ -796,10 +810,7 @@ export class CostPreChecker {
   }
 
   /** Price a call. Equivalent to `(await this.checkWithCost(call, options)).cost`. */
-  async check(
-    call: ContractCall,
-    options?: CostPreCheckOptions,
-  ): Promise<CostDecision> {
+  async check(call: ContractCall, options?: CostPreCheckOptions): Promise<CostDecision> {
     return (await this.checkWithCost(call, options)).cost;
   }
 
@@ -831,7 +842,7 @@ export class CostPreChecker {
     const ceiling =
       options?.maxFeeStroops !== undefined
         ? validateFeeCeiling(options.maxFeeStroops)
-        : this.maxFeeStroops ?? null;
+        : (this.maxFeeStroops ?? null);
     // Same boundary for the window snapshot: an unusable snapshot is a
     // configuration error, checked before any RPC, and `null` explicitly
     // clears a configured snapshot for this one check.
@@ -881,7 +892,7 @@ export class CostPreChecker {
     // Provenance travels with the verdict from the same simulation. A block or
     // an undetermined run has no priced snapshot, so it is explicitly null
     // rather than an invented ledger marker.
-    const provenance = decision.kind === "admissible" ? decision.provenance ?? null : null;
+    const provenance = decision.kind === "admissible" ? (decision.provenance ?? null) : null;
     if (decision.kind === "blocked") {
       return {
         kind: "blocked",
